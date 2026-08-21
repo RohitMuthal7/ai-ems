@@ -1,0 +1,168 @@
+package com.rohit.aiems.ai.formatter;
+
+import com.rohit.aiems.attendance.entity.Attendance;
+import com.rohit.aiems.employee.entity.Employee;
+import com.rohit.aiems.holiday.entity.Holiday;
+import com.rohit.aiems.leave.entity.Leave;
+import com.rohit.aiems.payroll.entity.Payroll;
+import org.springframework.stereotype.Component;
+
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+@Component
+public class AIResponseFormatter {
+
+    private static final DateTimeFormatter DATE =
+            DateTimeFormatter.ofPattern("dd MMM yyyy");
+
+    // ===========================
+    // Employee
+    // ===========================
+
+    public String employee(Employee e) {
+
+        return """
+# Employee Details
+
+| Field | Value |
+|------|------|
+| Employee ID | %s |
+| Name | %s |
+| Email | %s |
+| Phone | %s |
+| Department | %s |
+| Designation | %s |
+| Joining Date | %s |
+| Salary | ₹%.2f |
+| Status | %s |
+"""
+.formatted(
+                e.getEmployeeCode(),
+                e.getFullName(),
+                e.getEmail(),
+                e.getPhone(),
+                e.getDepartment(),
+                e.getDesignation(),
+                e.getJoiningDate().format(DATE),
+                e.getSalary(),
+                e.getStatus()
+        );
+    }
+
+    // ===========================
+    // Payroll
+    // ===========================
+
+    public String payroll(Payroll p) {
+
+        return """
+# Payroll Summary
+
+| Item | Value |
+|------|------:|
+| Month | %s |
+| Basic Salary | ₹%.2f |
+| HRA | ₹%.2f |
+| Bonus | ₹%.2f |
+| Deduction | ₹%.2f |
+| Gross Salary | ₹%.2f |
+| Net Salary | ₹%.2f |
+
+**Status:** %s
+"""
+.formatted(
+                p.getMonth(),
+                p.getBasicSalary(),
+                p.getHra(),
+                p.getBonus(),
+                p.getDeduction(),
+                p.getGrossSalary(),
+                p.getNetSalary(),
+                p.getStatus()
+        );
+    }
+
+    // ===========================
+    // Attendance
+    // ===========================
+
+    public String attendance(List<Attendance> attendance) {
+
+        StringBuilder md = new StringBuilder();
+
+        md.append("""
+# Attendance History
+
+| Date | Status |
+|------|--------|
+""");
+
+        attendance.forEach(a ->
+                md.append("| ")
+                        .append(a.getAttendanceDate().format(DATE))
+                        .append(" | ")
+                        .append(a.getStatus())
+                        .append(" |\n")
+        );
+
+        return md.toString();
+    }
+
+    // ===========================
+    // Leave
+    // ===========================
+
+    public String leave(List<Leave> leaves) {
+
+        StringBuilder md = new StringBuilder();
+
+        md.append("""
+# Leave History
+
+| From | To | Type | Status |
+|------|----|------|--------|
+""");
+
+        leaves.forEach(l ->
+                md.append("| ")
+                        .append(l.getStartDate().format(DATE))
+                        .append(" | ")
+                        .append(l.getEndDate().format(DATE))
+                        .append(" | ")
+                        .append(l.getLeaveType())
+                        .append(" | ")
+                        .append(l.getStatus())
+                        .append(" |\n")
+        );
+
+        return md.toString();
+    }
+
+    // ===========================
+    // Holidays
+    // ===========================
+
+    public String holidays(List<Holiday> holidays) {
+
+        StringBuilder md = new StringBuilder();
+
+        md.append("""
+# Upcoming Holidays
+
+| Date | Holiday |
+|------|----------|
+""");
+
+        holidays.forEach(h ->
+                md.append("| ")
+                        .append(h.getHolidayDate().format(DATE))
+                        .append(" | ")
+                        .append(h.getName())
+                        .append(" |\n")
+        );
+
+        return md.toString();
+    }
+
+}
