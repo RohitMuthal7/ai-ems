@@ -1,110 +1,286 @@
 import axios from "axios";
 
-/**
- * Local Storage Keys
- * Keep all storage keys in one place so they are easy to change later.
- */
+// ===========================================================================
+// Local Storage Keys
+// ===========================================================================
+
 const TOKEN_KEY = "jwt_token";
 const USER_ROLE_KEY = "user_role";
 
-/**
- * Axios Instance
- * This instance will be used throughout the application.
- */
-const api = axios.create({
-   baseURL:
-       import.meta.env.VITE_API_URL ||
-       "http://localhost:8080/api",
 
+// ===========================================================================
+// API Base URL
+//
+// Local development:
+// VITE_API_URL is optional and falls back to localhost.
+//
+// Production:
+// Set VITE_API_URL in Netlify, for example:
+//
+// VITE_API_URL=https://api.ai-ems.com/api
+// ===========================================================================
+
+const API_BASE_URL =
+    import.meta.env.VITE_API_URL ||
+    "http://localhost:8080/api";
+
+
+// ===========================================================================
+// Axios Instance
+// ===========================================================================
+
+const api = axios.create({
+
+    baseURL: API_BASE_URL,
+
+    // 60 seconds is reasonable for AI requests and slower backend operations.
     timeout: 60000,
 
-    withCredentials: true,
+    /*
+     * Authentication is handled using:
+     *
+     * Authorization: Bearer <JWT>
+     *
+     * We are NOT using browser cookies for authentication,
+     * therefore credentials are not required.
+     */
+    withCredentials: false,
 
     headers: {
         "Content-Type": "application/json",
     },
 });
 
-/**
- * Request Interceptor
- * Runs before every request.
- * Adds JWT token automatically.
- */
+
+// ===========================================================================
+// Request Interceptor
+//
+// Automatically attaches JWT to authenticated requests.
+// ===========================================================================
+
 api.interceptors.request.use(
+
     (config) => {
-        const token = localStorage.getItem(TOKEN_KEY);
+
+        const token =
+            localStorage.getItem(
+                TOKEN_KEY
+            );
+
 
         if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+
+            config.headers =
+                config.headers || {};
+
+
+            config.headers.Authorization =
+                `Bearer ${token}`;
         }
+
 
         return config;
     },
 
+
     (error) => {
-        return Promise.reject(error);
+
+        return Promise.reject(
+            error
+        );
     }
 );
 
-/**
- * Response Interceptor
- * Runs after every response.
- * Handles common HTTP errors globally.
- */
+
+// ===========================================================================
+// Response Interceptor
+//
+// Handles common HTTP errors consistently.
+// ===========================================================================
+
 api.interceptors.response.use(
-    (response) => response,
+
+    (response) => {
+
+        return response;
+    },
+
 
     (error) => {
 
-        const status = error.response?.status;
+        const status =
+            error.response?.status;
+
+
+        const message =
+            error.response?.data?.message ||
+            error.response?.data?.error ||
+            error.message ||
+            "Something went wrong.";
+
 
         switch (status) {
 
+            // ================================================================
+            // 400 - Bad Request
+            // ================================================================
+
             case 400:
-                console.error("Bad Request");
+
+                console.error(
+                    "Bad Request:",
+                    message
+                );
+
                 break;
 
+
+            // ================================================================
+            // 401 - Unauthorized
+            //
+            // Remove invalid/expired JWT and send user to login.
+            // ================================================================
+
             case 401:
-                console.error("Unauthorized. Please login again.");
 
-                localStorage.removeItem(TOKEN_KEY);
-                localStorage.removeItem(USER_ROLE_KEY);
+                console.error(
+                    "Unauthorized:",
+                    message
+                );
 
-                if (!window.location.hash.includes("/login")) {
-                    window.location.replace("/#/login");
+
+                localStorage.removeItem(
+                    TOKEN_KEY
+                );
+
+
+                localStorage.removeItem(
+                    USER_ROLE_KEY
+                );
+
+
+                if (
+                    !window.location.hash.includes(
+                        "/login"
+                    )
+                ) {
+
+                    window.location.replace(
+                        "/#/login"
+                    );
                 }
 
                 break;
 
+
+            // ================================================================
+            // 403 - Forbidden
+            // ================================================================
+
             case 403:
-                console.error("Forbidden. You don't have permission.");
+
+                console.error(
+                    "Forbidden:",
+                    message
+                );
+
                 break;
+
+
+            // ================================================================
+            // 404 - Not Found
+            // ================================================================
 
             case 404:
-                console.error("Requested resource not found.");
+
+                console.error(
+                    "Resource not found:",
+                    message
+                );
+
                 break;
+
+
+            // ================================================================
+            // 409 - Conflict
+            // ================================================================
 
             case 409:
-                console.error("Conflict occurred.");
+
+                console.error(
+                    "Conflict:",
+                    message
+                );
+
                 break;
+
+
+            // ================================================================
+            // 429 - Too Many Requests
+            // ================================================================
+
+            case 429:
+
+                console.error(
+                    "Too many requests:",
+                    message
+                );
+
+                break;
+
+
+            // ================================================================
+            // 500 - Internal Server Error
+            // ================================================================
 
             case 500:
-                console.error("Internal Server Error.");
+
+                console.error(
+                    "Internal Server Error:",
+                    message
+                );
+
                 break;
 
-            default:
+
+            // ================================================================
+            // 502 / 503 / 504 - Backend / Gateway Problems
+            // ================================================================
+
+            case 502:
+            case 503:
+            case 504:
+
                 console.error(
-                    error.response?.data?.message ||
-                    error.message ||
-                    "Something went wrong."
+                    "Backend service unavailable:",
+                    message
+                );
+
+                break;
+
+
+            // ================================================================
+            // Network / Unknown Error
+            // ================================================================
+
+            default:
+
+                console.error(
+                    "API Request Failed:",
+                    message
                 );
         }
 
-        return Promise.reject(error);
+
+        return Promise.reject(
+            error
+        );
     }
 );
 
-/**
- * Export Axios Instance
- */
+
+// ===========================================================================
+// Export Axios Instance
+// ===========================================================================
+
 export default api;
