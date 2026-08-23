@@ -2,25 +2,25 @@ import api from "../api/axios";
 
 const authService = {
 
- async login(loginRequest) {
-     const response = await api.post("/auth/login", loginRequest);
-     return response.data;
- },
+  async login(loginRequest) {
+    const response = await api.post("/api/auth/login", loginRequest);
+    return response.data;
+  },
 
   register(registerRequest) {
-    return api.post("/auth/register", registerRequest);
+    return api.post("/api/auth/register", registerRequest);
   },
 
   verifyOtp(verificationRequest) {
-    return api.post("/auth/verify", verificationRequest);
+    return api.post("/api/auth/verify", verificationRequest);
   },
 
   forgotPassword(email) {
-    return api.post("/auth/forgot-password", { email });
+    return api.post("/api/auth/forgot-password", { email });
   },
 
   resetPassword(resetRequest) {
-    return api.post("/auth/reset-password", resetRequest);
+    return api.post("/api/auth/reset-password", resetRequest);
   }
 
 };
