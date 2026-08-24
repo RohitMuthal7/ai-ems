@@ -12,7 +12,8 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -22,7 +23,6 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-@Transactional
 public class EmployeeServiceImpl
         implements EmployeeService {
 
@@ -34,8 +34,11 @@ public class EmployeeServiceImpl
 
     private final EmailService emailService;
 
+    private final PlatformTransactionManager transactionManager;
+
     private static final SecureRandom SECURE_RANDOM =
             new SecureRandom();
+
 
     // ============================================================
     // CREATE EMPLOYEE
@@ -45,159 +48,262 @@ public class EmployeeServiceImpl
     public EmployeeResponse createEmployee(
             CreateEmployeeRequest request) {
 
-        if (employeeRepository.existsByEmail(
-                request.getEmail())) {
+        /*
+         * IMPORTANT:
+         *
+         * Database work is completed inside this transaction.
+         * The transaction is committed BEFORE the email is sent.
+         *
+         * This prevents a slow SMTP request from keeping the
+         * database transaction open and causing:
+         *
+         * "Lock wait timeout exceeded"
+         */
 
-            throw new RuntimeException(
-                    "Email already exists"
-            );
-        }
+        TransactionTemplate transactionTemplate =
+                new TransactionTemplate(transactionManager);
+
+
+        EmployeeResponse response =
+                transactionTemplate.execute(status -> {
+
+                    // ========================================================
+                    // CHECK EMPLOYEE EMAIL
+                    // ========================================================
+
+                    if (employeeRepository.existsByEmail(
+                            request.getEmail())) {
+
+                        throw new RuntimeException(
+                                "Email already exists"
+                        );
+                    }
+
+
+                    // ========================================================
+                    // FIND OR CREATE USER
+                    // ========================================================
+
+                    User user =
+                            userRepository
+                                    .findByEmail(
+                                            request.getEmail()
+                                    )
+                                    .orElseGet(() -> {
+
+                                        String activationToken =
+                                                generateActivationToken();
+
+
+                                        User newUser =
+                                                User.builder()
+                                                        .fullName(
+                                                                request.getFullName()
+                                                        )
+                                                        .email(
+                                                                request.getEmail()
+                                                        )
+                                                        .password(
+                                                                passwordEncoder.encode(
+                                                                        generateTemporaryPassword()
+                                                                )
+                                                        )
+                                                        .role(
+                                                                Role.EMPLOYEE
+                                                        )
+                                                        .verified(false)
+                                                        .activationToken(
+                                                                activationToken
+                                                        )
+                                                        .activationTokenExpiry(
+                                                                LocalDateTime.now()
+                                                                        .plusHours(24)
+                                                        )
+                                                        .build();
+
+
+                                        return userRepository.save(
+                                                newUser
+                                        );
+                                    });
+
+
+                    // ========================================================
+                    // USER MUST BE AN EMPLOYEE
+                    // ========================================================
+
+                    if (user.getRole() != Role.EMPLOYEE) {
+
+                        throw new RuntimeException(
+                                "A user account with this email already exists with another role."
+                        );
+                    }
+
+
+                    // ========================================================
+                    // EXISTING UNVERIFIED EMPLOYEE
+                    //
+                    // Generate a fresh activation token.
+                    // ========================================================
+
+                    if (!user.getVerified()) {
+
+                        String activationToken =
+                                generateActivationToken();
+
+
+                        user.setActivationToken(
+                                activationToken
+                        );
+
+
+                        user.setActivationTokenExpiry(
+                                LocalDateTime.now()
+                                        .plusHours(24)
+                        );
+
+
+                        userRepository.save(user);
+                    }
+
+
+                    // ========================================================
+                    // CREATE EMPLOYEE
+                    // ========================================================
+
+                    Employee employee =
+                            new Employee();
+
+
+                    employee.setEmployeeCode(
+                            generateEmployeeCode()
+                    );
+
+
+                    employee.setFullName(
+                            request.getFullName()
+                    );
+
+
+                    employee.setEmail(
+                            request.getEmail()
+                    );
+
+
+                    employee.setPhone(
+                            request.getPhone()
+                    );
+
+
+                    employee.setGender(
+                            request.getGender()
+                    );
+
+
+                    employee.setDob(
+                            request.getDob()
+                    );
+
+
+                    employee.setAddress(
+                            request.getAddress()
+                    );
+
+
+                    employee.setDepartment(
+                            request.getDepartment()
+                    );
+
+
+                    employee.setDesignation(
+                            request.getDesignation()
+                    );
+
+
+                    employee.setSalary(
+                            request.getSalary()
+                    );
+
+
+                    employee.setJoiningDate(
+                            request.getJoiningDate()
+                    );
+
+
+                    employee.setStatus(
+                            "ACTIVE"
+                    );
+
+
+                    employee.setProfileImage(
+                            null
+                    );
+
+
+                    // ========================================================
+                    // LINK EMPLOYEE WITH USER
+                    // ========================================================
+
+                    employee.setUser(user);
+
+
+                    employee.setCreatedAt(
+                            LocalDateTime.now()
+                    );
+
+
+                    employee.setUpdatedAt(
+                            LocalDateTime.now()
+                    );
+
+
+                    // ========================================================
+                    // SAVE EMPLOYEE
+                    // ========================================================
+
+                    Employee savedEmployee =
+                            employeeRepository.save(
+                                    employee
+                            );
+
+
+                    // ========================================================
+                    // RETURN RESPONSE
+                    //
+                    // Email is NOT sent here.
+                    // Transaction must finish first.
+                    // ========================================================
+
+                    return mapToResponse(
+                            savedEmployee
+                    );
+                });
+
+
+        // ============================================================
+        // DATABASE TRANSACTION HAS NOW COMMITTED
+        // ============================================================
+
+        /*
+         * Fetch the user AFTER the transaction has committed.
+         *
+         * Now email sending cannot hold the database transaction open.
+         */
 
         User user =
                 userRepository
-                        .findByEmail(request.getEmail())
-                        .orElseGet(() -> {
+                        .findByEmail(
+                                request.getEmail()
+                        )
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Employee user account could not be found after creation."
+                                )
+                        );
 
-                            String activationToken =
-                                    generateActivationToken();
-
-                            User newUser =
-                                    User.builder()
-                                            .fullName(
-                                                    request.getFullName()
-                                            )
-                                            .email(
-                                                    request.getEmail()
-                                            )
-                                            .password(
-                                                    passwordEncoder.encode(
-                                                            generateTemporaryPassword()
-                                                    )
-                                            )
-                                            .role(
-                                                    Role.EMPLOYEE
-                                            )
-                                            .verified(false)
-                                            .activationToken(
-                                                    activationToken
-                                            )
-                                            .activationTokenExpiry(
-                                                    LocalDateTime.now()
-                                                            .plusHours(24)
-                                            )
-                                            .build();
-
-                            return userRepository.save(
-                                    newUser
-                            );
-                        });
-
-        /*
-         * The email must belong to an Employee account.
-         * We must never attach an existing Admin account
-         * to a new Employee record.
-         */
-        if (user.getRole() != Role.EMPLOYEE) {
-
-            throw new RuntimeException(
-                    "A user account with this email already exists with another role."
-            );
-        }
-
-        /*
-         * Existing unactivated Employee account:
-         * create a fresh activation token.
-         */
-        if (!user.getVerified()) {
-
-            String activationToken =
-                    generateActivationToken();
-
-            user.setActivationToken(
-                    activationToken
-            );
-
-            user.setActivationTokenExpiry(
-                    LocalDateTime.now()
-                            .plusHours(24)
-            );
-
-            userRepository.save(user);
-        }
-
-        Employee employee =
-                new Employee();
-
-        employee.setEmployeeCode(
-                generateEmployeeCode()
-        );
-
-        employee.setFullName(
-                request.getFullName()
-        );
-
-        employee.setEmail(
-                request.getEmail()
-        );
-
-        employee.setPhone(
-                request.getPhone()
-        );
-
-        employee.setGender(
-                request.getGender()
-        );
-
-        employee.setDob(
-                request.getDob()
-        );
-
-        employee.setAddress(
-                request.getAddress()
-        );
-
-        employee.setDepartment(
-                request.getDepartment()
-        );
-
-        employee.setDesignation(
-                request.getDesignation()
-        );
-
-        employee.setSalary(
-                request.getSalary()
-        );
-
-        employee.setJoiningDate(
-                request.getJoiningDate()
-        );
-
-        employee.setStatus(
-                "ACTIVE"
-        );
-
-        employee.setProfileImage(
-                null
-        );
-
-        // Link employee with user
-        employee.setUser(user);
-
-        employee.setCreatedAt(
-                LocalDateTime.now()
-        );
-
-        employee.setUpdatedAt(
-                LocalDateTime.now()
-        );
-
-        Employee savedEmployee =
-                employeeRepository.save(
-                        employee
-                );
 
         // ============================================================
-        // SEND ACCOUNT ACTIVATION EMAIL
+        // SEND ACTIVATION EMAIL
         // ============================================================
 
         if (!user.getVerified()) {
@@ -209,10 +315,10 @@ public class EmployeeServiceImpl
             );
         }
 
-        return mapToResponse(
-                savedEmployee
-        );
+
+        return response;
     }
+
 
     // ============================================================
     // UPDATE EMPLOYEE
@@ -223,70 +329,89 @@ public class EmployeeServiceImpl
             Long id,
             CreateEmployeeRequest request) {
 
-        Employee employee =
-                employeeRepository.findById(id)
-                        .orElseThrow(() ->
-                                new EntityNotFoundException(
-                                        "Employee not found"
-                                )
-                        );
+        TransactionTemplate transactionTemplate =
+                new TransactionTemplate(transactionManager);
 
-        employee.setFullName(
-                request.getFullName()
-        );
 
-        employee.setPhone(
-                request.getPhone()
-        );
+        return transactionTemplate.execute(status -> {
 
-        employee.setGender(
-                request.getGender()
-        );
+            Employee employee =
+                    employeeRepository.findById(id)
+                            .orElseThrow(() ->
+                                    new EntityNotFoundException(
+                                            "Employee not found"
+                                    )
+                            );
 
-        employee.setDob(
-                request.getDob()
-        );
 
-        employee.setAddress(
-                request.getAddress()
-        );
+            employee.setFullName(
+                    request.getFullName()
+            );
 
-        employee.setDepartment(
-                request.getDepartment()
-        );
 
-        employee.setDesignation(
-                request.getDesignation()
-        );
+            employee.setPhone(
+                    request.getPhone()
+            );
 
-        employee.setSalary(
-                request.getSalary()
-        );
 
-        employee.setJoiningDate(
-                request.getJoiningDate()
-        );
+            employee.setGender(
+                    request.getGender()
+            );
 
-        employee.setUpdatedAt(
-                LocalDateTime.now()
-        );
 
-        Employee updatedEmployee =
-                employeeRepository.save(
-                        employee
-                );
+            employee.setDob(
+                    request.getDob()
+            );
 
-        return mapToResponse(
-                updatedEmployee
-        );
+
+            employee.setAddress(
+                    request.getAddress()
+            );
+
+
+            employee.setDepartment(
+                    request.getDepartment()
+            );
+
+
+            employee.setDesignation(
+                    request.getDesignation()
+            );
+
+
+            employee.setSalary(
+                    request.getSalary()
+            );
+
+
+            employee.setJoiningDate(
+                    request.getJoiningDate()
+            );
+
+
+            employee.setUpdatedAt(
+                    LocalDateTime.now()
+            );
+
+
+            Employee updatedEmployee =
+                    employeeRepository.save(
+                            employee
+                    );
+
+
+            return mapToResponse(
+                    updatedEmployee
+            );
+        });
     }
+
 
     // ============================================================
     // GET EMPLOYEE BY ID
     // ============================================================
 
     @Override
-    @Transactional(readOnly = true)
     public EmployeeResponse getEmployeeById(
             Long id) {
 
@@ -298,17 +423,18 @@ public class EmployeeServiceImpl
                                 )
                         );
 
+
         return mapToResponse(
                 employee
         );
     }
+
 
     // ============================================================
     // GET ALL EMPLOYEES
     // ============================================================
 
     @Override
-    @Transactional(readOnly = true)
     public List<EmployeeResponse> getAllEmployees() {
 
         return employeeRepository
@@ -318,41 +444,55 @@ public class EmployeeServiceImpl
                 .collect(Collectors.toList());
     }
 
+
     // ============================================================
     // DEACTIVATE EMPLOYEE
     // ============================================================
 
     @Override
-    public void deleteEmployee(Long id) {
+    public void deleteEmployee(
+            Long id) {
 
-        Employee employee =
-                employeeRepository.findById(id)
-                        .orElseThrow(() ->
-                                new EntityNotFoundException(
-                                        "Employee not found"
-                                )
-                        );
+        TransactionTemplate transactionTemplate =
+                new TransactionTemplate(transactionManager);
 
-        if ("INACTIVE".equalsIgnoreCase(
-                employee.getStatus())) {
 
-            throw new IllegalStateException(
-                    "Employee is already inactive."
+        transactionTemplate.executeWithoutResult(status -> {
+
+            Employee employee =
+                    employeeRepository.findById(id)
+                            .orElseThrow(() ->
+                                    new EntityNotFoundException(
+                                            "Employee not found"
+                                    )
+                            );
+
+
+            if ("INACTIVE".equalsIgnoreCase(
+                    employee.getStatus())) {
+
+                throw new IllegalStateException(
+                        "Employee is already inactive."
+                );
+            }
+
+
+            employee.setStatus(
+                    "INACTIVE"
             );
-        }
 
-        employee.setStatus(
-                "INACTIVE"
-        );
 
-        employee.setUpdatedAt(
-                LocalDateTime.now()
-        );
+            employee.setUpdatedAt(
+                    LocalDateTime.now()
+            );
 
-        employeeRepository.save(
-                employee
-        );
+
+            employeeRepository.save(
+                    employee
+            );
+        });
     }
+
 
     // ============================================================
     // MAP ENTITY -> RESPONSE
@@ -362,7 +502,9 @@ public class EmployeeServiceImpl
             Employee employee) {
 
         return EmployeeResponse.builder()
-                .id(employee.getId())
+                .id(
+                        employee.getId()
+                )
                 .employeeCode(
                         employee.getEmployeeCode()
                 )
@@ -396,6 +538,7 @@ public class EmployeeServiceImpl
                 .build();
     }
 
+
     // ============================================================
     // GENERATE EMPLOYEE CODE
     // ============================================================
@@ -412,6 +555,7 @@ public class EmployeeServiceImpl
                                             .substring(3)
                             );
 
+
                     return String.format(
                             "EMP%04d",
                             number + 1
@@ -423,6 +567,7 @@ public class EmployeeServiceImpl
                 );
     }
 
+
     // ============================================================
     // GENERATE ACTIVATION TOKEN
     // ============================================================
@@ -432,12 +577,17 @@ public class EmployeeServiceImpl
         byte[] bytes =
                 new byte[32];
 
-        SECURE_RANDOM.nextBytes(bytes);
+
+        SECURE_RANDOM.nextBytes(
+                bytes
+        );
+
 
         return Base64.getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(bytes);
     }
+
 
     // ============================================================
     // GENERATE RANDOM TEMPORARY PASSWORD
@@ -448,7 +598,11 @@ public class EmployeeServiceImpl
         byte[] bytes =
                 new byte[24];
 
-        SECURE_RANDOM.nextBytes(bytes);
+
+        SECURE_RANDOM.nextBytes(
+                bytes
+        );
+
 
         return Base64.getUrlEncoder()
                 .withoutPadding()

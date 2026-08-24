@@ -1,6 +1,7 @@
 package com.rohit.aiems.email;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
@@ -10,6 +11,14 @@ import org.springframework.stereotype.Service;
 public class EmailService {
 
     private final JavaMailSender mailSender;
+
+    @Value("${app.frontend.url}")
+    private String frontendUrl;
+
+
+    // ============================================================
+    // OTP EMAIL
+    // ============================================================
 
     public void sendOtpEmail(
             String toEmail,
@@ -27,11 +36,17 @@ public class EmailService {
         message.setText(
                 "Welcome to AI Employee Management System.\n\n"
                         + "Your OTP is: " + otp
-                        + "\n\nThis OTP is valid for 10 minutes."
+                        + "\n\n"
+                        + "This OTP is valid for 10 minutes."
         );
 
         mailSender.send(message);
     }
+
+
+    // ============================================================
+    // EMPLOYEE ACTIVATION EMAIL
+    // ============================================================
 
     public void sendEmployeeActivationEmail(
             String toEmail,
@@ -41,9 +56,12 @@ public class EmailService {
         SimpleMailMessage message =
                 new SimpleMailMessage();
 
+
         String activationLink =
-                "http://localhost:5173/#/activate-account?token="
+                frontendUrl
+                        + "/#/activate-account?token="
                         + activationToken;
+
 
         message.setTo(toEmail);
 
