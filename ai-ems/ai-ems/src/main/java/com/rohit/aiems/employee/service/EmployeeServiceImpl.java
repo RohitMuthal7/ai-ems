@@ -10,6 +10,7 @@ import com.rohit.aiems.employee.entity.Employee;
 import com.rohit.aiems.employee.repository.EmployeeRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class EmployeeServiceImpl
         implements EmployeeService {
 
@@ -36,6 +38,7 @@ public class EmployeeServiceImpl
 
     private final PlatformTransactionManager transactionManager;
 
+
     private static final SecureRandom SECURE_RANDOM =
             new SecureRandom();
 
@@ -48,31 +51,32 @@ public class EmployeeServiceImpl
     public EmployeeResponse createEmployee(
             CreateEmployeeRequest request) {
 
-        /*
-         * IMPORTANT:
-         *
-         * Database work is completed inside this transaction.
-         * The transaction is committed BEFORE the email is sent.
-         *
-         * This prevents a slow SMTP request from keeping the
-         * database transaction open and causing:
-         *
-         * "Lock wait timeout exceeded"
-         */
 
         TransactionTemplate transactionTemplate =
-                new TransactionTemplate(transactionManager);
+                new TransactionTemplate(
+                        transactionManager
+                );
 
+
+        // ========================================================
+        // DATABASE TRANSACTION
+        // ========================================================
 
         EmployeeResponse response =
                 transactionTemplate.execute(status -> {
+
 
                     // ========================================================
                     // CHECK EMPLOYEE EMAIL
                     // ========================================================
 
-                    if (employeeRepository.existsByEmail(
-                            request.getEmail())) {
+                    String email =
+                            request.getEmail()
+                                    .trim()
+                                    .toLowerCase();
+
+
+                    if (employeeRepository.existsByEmail(email)) {
 
                         throw new RuntimeException(
                                 "Email already exists"
@@ -86,10 +90,9 @@ public class EmployeeServiceImpl
 
                     User user =
                             userRepository
-                                    .findByEmail(
-                                            request.getEmail()
-                                    )
+                                    .findByEmail(email)
                                     .orElseGet(() -> {
+
 
                                         String activationToken =
                                                 generateActivationToken();
@@ -97,28 +100,36 @@ public class EmployeeServiceImpl
 
                                         User newUser =
                                                 User.builder()
+
                                                         .fullName(
                                                                 request.getFullName()
                                                         )
+
                                                         .email(
-                                                                request.getEmail()
+                                                                email
                                                         )
+
                                                         .password(
                                                                 passwordEncoder.encode(
                                                                         generateTemporaryPassword()
                                                                 )
                                                         )
+
                                                         .role(
                                                                 Role.EMPLOYEE
                                                         )
+
                                                         .verified(false)
+
                                                         .activationToken(
                                                                 activationToken
                                                         )
+
                                                         .activationTokenExpiry(
                                                                 LocalDateTime.now()
                                                                         .plusHours(24)
                                                         )
+
                                                         .build();
 
 
@@ -129,7 +140,7 @@ public class EmployeeServiceImpl
 
 
                     // ========================================================
-                    // USER MUST BE AN EMPLOYEE
+                    // USER MUST BE EMPLOYEE
                     // ========================================================
 
                     if (user.getRole() != Role.EMPLOYEE) {
@@ -142,8 +153,6 @@ public class EmployeeServiceImpl
 
                     // ========================================================
                     // EXISTING UNVERIFIED EMPLOYEE
-                    //
-                    // Generate a fresh activation token.
                     // ========================================================
 
                     if (!user.getVerified()) {
@@ -186,7 +195,7 @@ public class EmployeeServiceImpl
 
 
                     employee.setEmail(
-                            request.getEmail()
+                            email
                     );
 
 
@@ -241,7 +250,7 @@ public class EmployeeServiceImpl
 
 
                     // ========================================================
-                    // LINK EMPLOYEE WITH USER
+                    // LINK USER
                     // ========================================================
 
                     employee.setUser(user);
@@ -269,9 +278,6 @@ public class EmployeeServiceImpl
 
                     // ========================================================
                     // RETURN RESPONSE
-                    //
-                    // Email is NOT sent here.
-                    // Transaction must finish first.
                     // ========================================================
 
                     return mapToResponse(
@@ -281,40 +287,63 @@ public class EmployeeServiceImpl
 
 
         // ============================================================
-        // DATABASE TRANSACTION HAS NOW COMMITTED
+        // DATABASE TRANSACTION IS COMPLETE
         // ============================================================
 
-        /*
-         * Fetch the user AFTER the transaction has committed.
-         *
-         * Now email sending cannot hold the database transaction open.
-         */
+        try {
 
-        User user =
-                userRepository
-                        .findByEmail(
-                                request.getEmail()
-                        )
-                        .orElseThrow(() ->
-                                new RuntimeException(
-                                        "Employee user account could not be found after creation."
-                                )
+            User user =
+                    userRepository
+                            .findByEmail(
+                                    request.getEmail()
+                                            .trim()
+                                            .toLowerCase()
+                            )
+                            .orElse(null);
+
+
+            if (user != null &&
+                    !user.getVerified()) {
+
+
+                boolean emailSent =
+                        emailService.sendEmployeeActivationEmail(
+                                user.getEmail(),
+                                user.getFullName(),
+                                user.getActivationToken()
                         );
 
 
-        // ============================================================
-        // SEND ACTIVATION EMAIL
-        // ============================================================
+                if (!emailSent) {
 
-        if (!user.getVerified()) {
+                    log.warn(
+                            "Employee {} was created successfully, "
+                                    + "but activation email could not be sent.",
+                            user.getEmail()
+                    );
+                }
 
-            emailService.sendEmployeeActivationEmail(
-                    user.getEmail(),
-                    user.getFullName(),
-                    user.getActivationToken()
+            }
+
+        } catch (Exception e) {
+
+            /*
+             * VERY IMPORTANT:
+             *
+             * Never fail employee creation because of email.
+             */
+
+            log.error(
+                    "Employee created but activation email failed: {}",
+                    e.getMessage(),
+                    e
             );
         }
 
+
+        // ============================================================
+        // ALWAYS RETURN SUCCESS AFTER DATABASE CREATION
+        // ============================================================
 
         return response;
     }
@@ -329,14 +358,19 @@ public class EmployeeServiceImpl
             Long id,
             CreateEmployeeRequest request) {
 
+
         TransactionTemplate transactionTemplate =
-                new TransactionTemplate(transactionManager);
+                new TransactionTemplate(
+                        transactionManager
+                );
 
 
         return transactionTemplate.execute(status -> {
 
+
             Employee employee =
-                    employeeRepository.findById(id)
+                    employeeRepository
+                            .findById(id)
                             .orElseThrow(() ->
                                     new EntityNotFoundException(
                                             "Employee not found"
@@ -416,7 +450,8 @@ public class EmployeeServiceImpl
             Long id) {
 
         Employee employee =
-                employeeRepository.findById(id)
+                employeeRepository
+                        .findById(id)
                         .orElseThrow(() ->
                                 new EntityNotFoundException(
                                         "Employee not found"
@@ -453,44 +488,51 @@ public class EmployeeServiceImpl
     public void deleteEmployee(
             Long id) {
 
+
         TransactionTemplate transactionTemplate =
-                new TransactionTemplate(transactionManager);
-
-
-        transactionTemplate.executeWithoutResult(status -> {
-
-            Employee employee =
-                    employeeRepository.findById(id)
-                            .orElseThrow(() ->
-                                    new EntityNotFoundException(
-                                            "Employee not found"
-                                    )
-                            );
-
-
-            if ("INACTIVE".equalsIgnoreCase(
-                    employee.getStatus())) {
-
-                throw new IllegalStateException(
-                        "Employee is already inactive."
+                new TransactionTemplate(
+                        transactionManager
                 );
-            }
 
 
-            employee.setStatus(
-                    "INACTIVE"
-            );
+        transactionTemplate.executeWithoutResult(
+                status -> {
 
 
-            employee.setUpdatedAt(
-                    LocalDateTime.now()
-            );
+                    Employee employee =
+                            employeeRepository
+                                    .findById(id)
+                                    .orElseThrow(() ->
+                                            new EntityNotFoundException(
+                                                    "Employee not found"
+                                            )
+                                    );
 
 
-            employeeRepository.save(
-                    employee
-            );
-        });
+                    if ("INACTIVE".equalsIgnoreCase(
+                            employee.getStatus())) {
+
+                        throw new IllegalStateException(
+                                "Employee is already inactive."
+                        );
+                    }
+
+
+                    employee.setStatus(
+                            "INACTIVE"
+                    );
+
+
+                    employee.setUpdatedAt(
+                            LocalDateTime.now()
+                    );
+
+
+                    employeeRepository.save(
+                            employee
+                    );
+                }
+        );
     }
 
 
@@ -502,39 +544,51 @@ public class EmployeeServiceImpl
             Employee employee) {
 
         return EmployeeResponse.builder()
+
                 .id(
                         employee.getId()
                 )
+
                 .employeeCode(
                         employee.getEmployeeCode()
                 )
+
                 .fullName(
                         employee.getFullName()
                 )
+
                 .email(
                         employee.getEmail()
                 )
+
                 .phone(
                         employee.getPhone()
                 )
+
                 .department(
                         employee.getDepartment()
                 )
+
                 .designation(
                         employee.getDesignation()
                 )
+
                 .salary(
                         employee.getSalary()
                 )
+
                 .joiningDate(
                         employee.getJoiningDate()
                 )
+
                 .profileImage(
                         employee.getProfileImage()
                 )
+
                 .status(
                         employee.getStatus()
                 )
+
                 .build();
     }
 
@@ -590,7 +644,7 @@ public class EmployeeServiceImpl
 
 
     // ============================================================
-    // GENERATE RANDOM TEMPORARY PASSWORD
+    // GENERATE TEMPORARY PASSWORD
     // ============================================================
 
     private String generateTemporaryPassword() {
