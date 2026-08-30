@@ -14,10 +14,10 @@ import java.util.Map;
 @Slf4j
 public class EmailService {
 
-    @Value("${resend.api.key}")
-    private String resendApiKey;
+    @Value("${brevo.api.key}")
+    private String brevoApiKey;
 
-    @Value("${resend.from.email}")
+    @Value("${brevo.from.email}")
     private String fromEmail;
 
     @Value("${app.frontend.url}")
@@ -131,7 +131,7 @@ public class EmailService {
 
 
     // ============================================================
-    // RESEND API
+    // BREVO API
     // ============================================================
 
     private void sendEmail(
@@ -139,44 +139,94 @@ public class EmailService {
             String subject,
             String text) throws Exception {
 
-        Map<String, Object> body = new HashMap<>();
+        Map<String, Object> sender =
+                new HashMap<>();
 
-        body.put("from", fromEmail);
-        body.put("to", new String[]{toEmail});
-        body.put("subject", subject);
-        body.put("text", text);
+        sender.put(
+                "email",
+                fromEmail
+        );
+
+
+        Map<String, Object> recipient =
+                new HashMap<>();
+
+        recipient.put(
+                "email",
+                toEmail
+        );
+
+
+        Map<String, Object> body =
+                new HashMap<>();
+
+        body.put(
+                "sender",
+                sender
+        );
+
+        body.put(
+                "to",
+                new Map[]{recipient}
+        );
+
+        body.put(
+                "subject",
+                subject
+        );
+
+        body.put(
+                "textContent",
+                text
+        );
+
 
         String jsonBody =
                 objectMapper.writeValueAsString(body);
 
-        HttpHeaders headers = new HttpHeaders();
 
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(resendApiKey);
+        HttpHeaders headers =
+                new HttpHeaders();
+
+        headers.setContentType(
+                MediaType.APPLICATION_JSON
+        );
+
+        headers.set(
+                "api-key",
+                brevoApiKey
+        );
+
 
         HttpEntity<String> request =
-                new HttpEntity<>(jsonBody, headers);
+                new HttpEntity<>(
+                        jsonBody,
+                        headers
+                );
+
 
         ResponseEntity<String> response =
                 restTemplate.exchange(
-                        "https://api.resend.com/emails",
+                        "https://api.brevo.com/v3/smtp/email",
                         HttpMethod.POST,
                         request,
                         String.class
                 );
 
+
         if (!response.getStatusCode().is2xxSuccessful()) {
 
             throw new RuntimeException(
-                    "Resend API failed: "
+                    "Brevo API failed: "
                             + response.getStatusCode()
                             + " - "
                             + response.getBody()
             );
         }
 
+
         log.info(
-                "Resend API accepted email to {}",
+                "Brevo API accepted email to {}",
                 toEmail
         );
     }
